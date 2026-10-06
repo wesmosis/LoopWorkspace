@@ -1,0 +1,49 @@
+name: Build Loop Ad Hoc
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: xcode-27
+    env:
+      TEAMID: ${{ secrets.TEAMID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      FASTLANE_KEY_ID: ${{ secrets.FASTLANE_KEY_ID }}
+      FASTLANE_ISSUER_ID: ${{ secrets.FASTLANE_ISSUER_ID }}
+      FASTLANE_KEY: ${{ secrets.FASTLANE_KEY }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_READONLY: 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_PAT }}
+          submodules: recursive
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode_27.0.app/Contents/Developer
+      - name: Install dependencies
+        run: bundle install
+      - name: Configure direct installation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('fastlane/Fastfile')
+          s = p.read_text()
+          assert s.count('export_method: "app-store"') == 1
+          assert 'type: "appstore"' in s
+          s = s.replace('type: "appstore",', 'type: "adhoc", readonly: false, force: true,', 1)
+          s = s.replace('export_method: "app-store"', 'export_method: "ad-hoc"')
+          p.write_text(s)
+          PY
+          ruby -c fastlane/Fastfile
+      - name: Build signed IPA
+        run: bundle exec fastlane build_loop
+      - name: Save IPA and build log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Loop-Ad-Hoc
+          retention-days: 7
+          path: |
+            artifacts/Loop.ipa
+            buildlog
