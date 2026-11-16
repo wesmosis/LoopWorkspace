@@ -1,6 +1,9 @@
 name: Build Loop Ad Hoc
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/build_loop_adhoc.yml]
 permissions:
   contents: read
 jobs:
@@ -18,9 +21,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GH_PAT }}
+          repository: LoopKit/LoopWorkspace
+          ref: v3.14.13
           submodules: recursive
       - name: Select Xcode
-        run: sudo xcode-select --switch /Applications/Xcode_27.0.app/Contents/Developer
+        run: sudo xcode-select --switch /Applications/Xcode_27.1.app/Contents/Developer
       - name: Install dependencies
         run: bundle install
       - name: Configure direct installation
@@ -38,12 +43,35 @@ jobs:
           ruby -c fastlane/Fastfile
       - name: Build signed IPA
         run: bundle exec fastlane build_loop
+      - name: Verify Mais provisioning and release version
+        run: |
+          python3 - <<'PY'
+          import zipfile, plistlib, subprocess, datetime
+          from pathlib import Path
+          udid = '00008140-0009551921D3001C'
+          with zipfile.ZipFile('artifacts/Loop.ipa') as z:
+              info = plistlib.loads(z.read('Payload/Loop.app/Info.plist'))
+              assert info['CFBundleShortVersionString'] == '3.14.13', info['CFBundleShortVersionString']
+              assert info['CFBundleIdentifier'] == 'com.9LBGCPJVK6.loopkit.Loop'
+              profiles = [n for n in z.namelist() if n.endswith('embedded.mobileprovision')]
+              assert len(profiles) >= 6
+              report = []
+              for n in profiles:
+                  raw = subprocess.run(['openssl','cms','-verify','-noverify','-inform','DER'], input=z.read(n), capture_output=True, check=True).stdout
+                  p = plistlib.loads(raw)
+                  assert '9LBGCPJVK6' in p['TeamIdentifier']
+                  assert udid in [d.upper() for d in p.get('ProvisionedDevices',[])], n
+                  assert p['ExpirationDate'] > datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None), n
+                  report.append(n + ': verified for Mais; expires ' + p['ExpirationDate'].isoformat())
+              Path('artifacts/verification.txt').write_text('Loop ' + info['CFBundleShortVersionString'] + ' build ' + info['CFBundleVersion'] + '\\n' + '\\n'.join(report))
+          PY
       - name: Save IPA and build log
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: Loop-Ad-Hoc
-          retention-days: 7
+          name: Loop-3.14.13-Ad-Hoc
+          retention-days: 30
           path: |
             artifacts/Loop.ipa
+            artifacts/verification.txt
             buildlog
